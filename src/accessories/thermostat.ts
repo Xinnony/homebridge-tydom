@@ -62,7 +62,7 @@ export const setupThermostat = (
         const data = await getTydomDeviceData<TydomDeviceThermostatData>(client, {deviceId, endpointId});
         const authorization = getTydomDataPropValue<TydomDeviceThermostatAuthorization>(data, 'authorization');
         const setpoint = getTydomDataPropValue<number>(data, 'setpoint');
-        const temperature = getTydomDataPropValue<number>(data, 'temperature');
+        const temperature = getTydomDataPropValue<number>(data, 'temperature') ?? getTydomDataPropValue<number>(data, 'ambientTemperature');
         const nextValue =
           authorization === 'HEATING' && setpoint > temperature
             ? CurrentHeatingCoolingState.HEAT
@@ -122,7 +122,7 @@ export const setupThermostat = (
       debugGet(CurrentTemperature, service);
       try {
         const data = await getTydomDeviceData<TydomDeviceThermostatData>(client, {deviceId, endpointId});
-        const temperature = getTydomDataPropValue<number>(data, 'temperature');
+        const temperature = getTydomDataPropValue<number>(data, 'temperature') ?? getTydomDataPropValue<number>(data, 'ambientTemperature');
         debugGetResult(CurrentTemperature, service, temperature);
         callback(null, temperature);
       } catch (err) {
@@ -133,11 +133,21 @@ export const setupThermostat = (
 
   service
     .getCharacteristic(TargetTemperature)
+    .setProps({
+      minValue: 5,
+      maxValue: 30,
+      minStep: 0.5
+    })
     .on(CharacteristicEventTypes.GET, async (callback: NodeCallback<CharacteristicValue>) => {
       debugGet(TargetTemperature, service);
       try {
         const data = await getTydomDeviceData<TydomDeviceThermostatData>(client, {deviceId, endpointId});
         const setpoint = getTydomDataPropValue<number>(data, 'setpoint');
+        if (setpoint === null || setpoint === undefined) {
+          debugGetResult(TargetTemperature, service, null);
+          callback(new Error('Setpoint value is null from device'));
+          return;
+        }
         debugGetResult(TargetTemperature, service, setpoint);
         callback(null, setpoint);
       } catch (err) {
@@ -147,10 +157,11 @@ export const setupThermostat = (
     .on(CharacteristicEventTypes.SET, async (value: CharacteristicValue, callback: CharacteristicSetCallback) => {
       try {
         debugSet(TargetTemperature, service, value);
+        const setpoint = Math.max(5, Math.min(30, value as number));
         await client.put(`/devices/${deviceId}/endpoints/${endpointId}/data`, [
           {
             name: 'setpoint',
-            value: value
+            value: setpoint
           }
         ]);
         debugSetResult(TargetTemperature, service, value);
@@ -361,6 +372,12 @@ export const updateThermostat = (
         return;
       }
       case 'temperature': {
+        const service = getAccessoryService(accessory, Service.Thermostat);
+        debugSetUpdate(CurrentTemperature, service, value);
+        service.updateCharacteristic(CurrentTemperature, value as number);
+        return;
+      }
+      case 'ambientTemperature': {
         const service = getAccessoryService(accessory, Service.Thermostat);
         debugSetUpdate(CurrentTemperature, service, value);
         service.updateCharacteristic(CurrentTemperature, value as number);
